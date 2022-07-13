@@ -1,0 +1,184 @@
+dataloader:
+  evaluator: {_target_: detectron2.evaluation.LVISEvaluator, dataset_name: '${..test.dataset.names}'}
+  test:
+    _target_: detectron2.data.build_detection_test_loader
+    dataset: {_target_: detectron2.data.get_detection_dataset_dicts, filter_empty: false, names: lvis_v1_val}
+    mapper:
+      _target_: detectron2.data.DatasetMapper
+      augmentations:
+      - _target_: wsod.data.transforms.custom_augmentation_impl.EfficientDetResizeCrop
+        scale: [0.1, 2.0]
+        size: 640
+      image_format: ${...train.mapper.image_format}
+      is_train: false
+    num_workers: 8
+  train:
+    _target_: detectron2.data.build_detection_train_loader
+    dataset: {_target_: detectron2.data.get_detection_dataset_dicts, names: lvis_v1_train}
+    mapper:
+      _target_: wsod.data.custom_dataset_mapper.CustomDatasetMapper
+      augmentations:
+      - _target_: wsod.data.transforms.custom_augmentation_impl.EfficientDetResizeCrop
+        scale: [0.1, 2.0]
+        size: 640
+      - {_target_: detectron2.data.transforms.RandomFlip, horizontal: true}
+      dataset_ann: [box, box]
+      dataset_augs: []
+      image_format: RGB
+      is_train: true
+      use_diff_bs_size: false
+      use_instance_mask: true
+      with_ann_type: false
+    num_workers: 8
+    sampler:
+      _target_: detectron2.data.samplers.RepeatFactorTrainingSampler
+      repeat_factors:
+        _target_: detectron2.data.samplers.RepeatFactorTrainingSampler.repeat_factors_from_category_frequency
+        dataset_dicts: {_target_: detectron2.data.get_detection_dataset_dicts, names: lvis_v1_train}
+        repeat_thresh: 0.001
+    total_batch_size: 8
+lr_multiplier:
+  _target_: detectron2.solver.WarmupParamScheduler
+  scheduler:
+    _target_: fvcore.common.param_scheduler.MultiStepParamScheduler
+    milestones: [540000, 660000]
+    num_updates: 720000
+    values: [1.0, 0.1, 0.01]
+  warmup_factor: 0.0
+  warmup_length: 0.006944444444444444
+mae_checkpoint: {path: /discobox/zcxu/MIMWSOD/checkpoint/mae_pretrain_vit_base_full.pth}
+model:
+  _target_: detectron2._cfg_loadercf5b.common.py.GeneralizedRCNNImageListForward
+  backbone:
+    _target_: detectron2.modeling.FPN
+    bottom_up:
+      _out_feature_channels: [192, 384, 512, 512]
+      _target_: models.MIMDetBackbone
+      decoder: {_target_: models.MIMDetDecoder, checkpointing: true, decoder_embed_dim: 512, depth: 4, embed_dim: 768, img_size: '${..encoder.img_size}', mlp_ratio: 4.0, num_heads: 16, patch_size: '${..encoder.patch_size}', pretrained: '${..encoder.pretrained}'}
+      encoder:
+        _target_: models.MIMDetEncoder
+        checkpointing: true
+        depth: 12
+        dpr: 0.1
+        embed_dim: 768
+        img_size: 800
+        in_chans: 3
+        mlp_ratio: 4.0
+        norm_layer: !!python/object/apply:functools.partial
+          args: [&id001 !!python/name:torch.nn.modules.normalization.LayerNorm '']
+          state: !!python/tuple
+          - *id001
+          - !!python/tuple []
+          - {eps: 1.0e-05}
+          - null
+        num_heads: 12
+        patch_size: 16
+        pretrained: ${mae_checkpoint.path}
+      sample_ratio: 0.5
+      size_divisibility: 32
+    in_features: [c2, c3, c4, c5]
+    norm: SyncBN
+    out_channels: 256
+    top_block: {_target_: detectron2.modeling.backbone.fpn.LastLevelMaxPool}
+  input_format: RGB
+  lsj_postprocess: false
+  pixel_mean: [123.675, 116.28, 103.53]
+  pixel_std: [58.395, 57.12, 57.375]
+  proposal_generator:
+    _target_: detectron2.modeling.proposal_generator.RPN
+    anchor_generator:
+      _target_: detectron2.modeling.anchor_generator.DefaultAnchorGenerator
+      aspect_ratios: [0.5, 1.0, 2.0]
+      offset: 0.0
+      sizes:
+      - [32]
+      - [64]
+      - [128]
+      - [256]
+      - [512]
+      strides: [4, 8, 16, 32, 64]
+    anchor_matcher:
+      _target_: detectron2.modeling.matcher.Matcher
+      allow_low_quality_matches: true
+      labels: [0, -1, 1]
+      thresholds: [0.3, 0.7]
+    batch_size_per_image: 256
+    box2box_transform:
+      _target_: detectron2.modeling.box_regression.Box2BoxTransform
+      weights: [1.0, 1.0, 1.0, 1.0]
+    head:
+      _target_: detectron2.modeling.proposal_generator.StandardRPNHead
+      conv_dims: [-1, -1]
+      in_channels: 256
+      num_anchors: 3
+    in_features: [p2, p3, p4, p5, p6]
+    nms_thresh: 0.7
+    positive_fraction: 0.5
+    post_nms_topk: [1000, 1000]
+    pre_nms_topk: [2000, 1000]
+  roi_heads:
+    _target_: detectron2.modeling.StandardROIHeads
+    batch_size_per_image: 512
+    box_head:
+      _target_: detectron2.modeling.roi_heads.FastRCNNConvFCHead
+      conv_dims: [256, 256, 256, 256]
+      conv_norm: &id002 !!python/name:None.%3Clambda%3E ''
+      fc_dims: [1024]
+      input_shape: !!python/object:detectron2.layers.shape_spec.ShapeSpec {channels: 256, height: 7, stride: null, width: 7}
+    box_in_features: [p2, p3, p4, p5]
+    box_pooler:
+      _target_: detectron2.modeling.poolers.ROIPooler
+      output_size: 7
+      pooler_type: ROIAlignV2
+      sampling_ratio: 0
+      scales: [0.25, 0.125, 0.0625, 0.03125]
+    box_predictor:
+      _target_: detectron2.modeling.FastRCNNOutputLayers
+      box2box_transform:
+        _target_: detectron2.modeling.box_regression.Box2BoxTransform
+        weights: [10, 10, 5, 5]
+      input_shape: !!python/object:detectron2.layers.shape_spec.ShapeSpec {channels: 1024, height: null, stride: null, width: null}
+      num_classes: ${..num_classes}
+      test_score_thresh: 0.05
+    mask_head:
+      _target_: detectron2.modeling.roi_heads.MaskRCNNConvUpsampleHead
+      conv_dims: [256, 256, 256, 256, 256]
+      conv_norm: *id002
+      input_shape: !!python/object:detectron2.layers.shape_spec.ShapeSpec {channels: 256, height: 14, stride: null, width: 14}
+      num_classes: ${..num_classes}
+    mask_in_features: [p2, p3, p4, p5]
+    mask_pooler:
+      _target_: detectron2.modeling.poolers.ROIPooler
+      output_size: 14
+      pooler_type: ROIAlignV2
+      sampling_ratio: 0
+      scales: [0.25, 0.125, 0.0625, 0.03125]
+    num_classes: 1203
+    positive_fraction: 0.25
+    proposal_matcher:
+      _target_: detectron2.modeling.matcher.Matcher
+      allow_low_quality_matches: false
+      labels: [0, 1]
+      thresholds: [0.5]
+optimizer:
+  _target_: torch.optim.AdamW
+  betas: [0.9, 0.999]
+  lr: 0.0001
+  params:
+    _target_: detectron2._cfg_loadercf5b.common.py.get_fpn_model_parameters
+    base_lr: 0.0001
+    multiplier: 2.0
+    skip_list: [pos_embed, decoder_pos_embed]
+    weight_decay: 0.001
+    weight_decay_norm: 0.0
+  weight_decay: 0.001
+train:
+  amp: {enabled: true}
+  checkpointer: {max_to_keep: 100, period: 20000}
+  ddp: {broadcast_buffers: false, find_unused_parameters: false, fp16_compression: true}
+  device: cuda
+  eval_period: 20000
+  init_checkpoint: ''
+  log_period: 20
+  max_iter: 720000
+  output_dir: output_newmapper_wd_0.001_lr_2e-4/mimdet_vit_base_mask_rcnn_fpn_sr_0p5_800_1333_4xdec_lvis_3x

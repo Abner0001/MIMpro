@@ -1,0 +1,12 @@
+datasets
+checkpoint/
+detectron2/
+
+# compilation and distribution
+__pycache__
+*.egg-info/
+build/
+dist/
+
+# d2 output dir
+output
